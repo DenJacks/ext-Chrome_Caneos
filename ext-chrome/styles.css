@@ -565,6 +565,12 @@
   white-space: pre-wrap;
 }
 
+.fc-chat-video-link {
+  color: inherit;
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+}
+
 .fc-message-time {
   align-self: flex-end;
   font-size: 10px;
@@ -1004,6 +1010,7 @@
 }
 
 .fc-youtube-thumb-wrap {
+  display: block;
   position: relative;
   width: 100%;
   background: #0F172A;

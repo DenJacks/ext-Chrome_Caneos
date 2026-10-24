@@ -1110,9 +1110,59 @@
     author.className = "fc-message-author";
     author.textContent = senderName || (sender === "user" ? authSession?.displayName || "You" : "Member");
 
-    const body = document.createElement("span");
+    const body = document.createElement("div");
     body.className = "fc-message-text";
-    body.textContent = text;
+    const videoID = getYouTubeID(text);
+    if (videoID) {
+      const card = document.createElement("div");
+      card.className = "fc-youtube-card";
+
+      const videoLink = document.createElement("a");
+      videoLink.className = "fc-youtube-thumb-wrap";
+      videoLink.href = text;
+      videoLink.target = "_blank";
+      videoLink.rel = "noopener noreferrer";
+      videoLink.setAttribute("aria-label", "Watch YouTube video");
+
+      const thumbnail = document.createElement("img");
+      thumbnail.className = "fc-youtube-thumb";
+      thumbnail.src = `https://img.youtube.com/vi/${encodeURIComponent(videoID)}/mqdefault.jpg`;
+      thumbnail.alt = "YouTube video thumbnail";
+      thumbnail.onerror = () => {
+        thumbnail.style.display = "none";
+      };
+
+      const playButton = document.createElement("span");
+      playButton.className = "fc-youtube-play";
+      playButton.textContent = "▶";
+      playButton.setAttribute("aria-hidden", "true");
+      videoLink.append(thumbnail, playButton);
+
+      const details = document.createElement("div");
+      details.className = "fc-youtube-details";
+
+      const label = document.createElement("div");
+      label.className = "fc-youtube-label";
+      label.textContent = "YouTube Video";
+
+      const title = document.createElement("div");
+      title.className = "fc-youtube-title";
+      title.textContent = "Watch this video";
+
+      const url = document.createElement("a");
+      url.className = "fc-youtube-url";
+      url.href = text;
+      url.target = "_blank";
+      url.rel = "noopener noreferrer";
+      url.textContent = text;
+      url.title = "Open YouTube video";
+
+      details.append(label, title, url);
+      card.append(videoLink, details);
+      body.appendChild(card);
+    } else {
+      body.textContent = text;
+    }
 
     const time = document.createElement("time");
     time.className = "fc-message-time";
@@ -1129,37 +1179,38 @@
   }
 
 
+  async function sendChatMessage(text) {
+    if (!activeGroup || !authSession) {
+      throw new Error("Sign in and open a group before sending a message.");
+    }
+
+    sendBtn.disabled = true;
+    try {
+      await firebaseRequest(`groups/${activeGroup.id}/messages`, "POST", {
+        text,
+        senderUid: authSession.localId,
+        senderName: authSession.displayName,
+        createdAt: Date.now()
+      });
+      await loadMessages();
+    } finally {
+      sendBtn.disabled = false;
+    }
+  }
+
   function sendMessage() {
-
-    const text =
-      input.value.trim();
-
+    const text = input.value.trim();
     if (!text) {
       return;
     }
 
-
-    if (!activeGroup || !authSession) {
-      alert("Sign in and open a group before sending a message.");
-      return;
-    }
-
     input.value = "";
-    sendBtn.disabled = true;
-
-    firebaseRequest(`groups/${activeGroup.id}/messages`, "POST", {
-      text,
-      senderUid: authSession.localId,
-      senderName: authSession.displayName,
-      createdAt: Date.now()
-    }).then(() => loadMessages()).catch((error) => {
+    sendChatMessage(text).catch((error) => {
       alert(`Message could not be sent: ${error.message}`);
       input.value = text;
     }).finally(() => {
-      sendBtn.disabled = false;
       input.focus();
     });
-
   }
 
 
@@ -1179,59 +1230,40 @@
 
   function isYouTubeURL(url) {
     try {
-      const parsed =
-        new URL(url);
-
-      const hostname =
-        parsed.hostname.toLowerCase();
-
-
-      // youtube.com/watch?v=
-
-      if (
-        hostname.includes("youtube.com") &&
-        parsed.pathname === "/watch"
-      ) {
-
-        return parsed.searchParams.get("v");
-
-      }
-
-
-      // youtube.com/shorts/
-
-      if (
-        hostname.includes("youtube.com") &&
-        parsed.pathname.startsWith("/shorts/")
-      ) {
-
-        return parsed.pathname
-          .split("/")[2];
-
-      }
-
-
-      // youtu.be/
-
-      if (
-        hostname.includes("youtu.be")
-      ) {
-
-        return parsed.pathname
-          .replace("/", "")
-          .split("?")[0];
-
-      }
-
+      return Boolean(getYouTubeID(url));
     } catch {
-
-      return null;
-
+      return false;
     }
+  }
 
+  function getYouTubeID(url) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "https:") {
+        return null;
+      }
 
-    return null;
+      const hostname = parsed.hostname.toLowerCase();
+      let videoID = "";
 
+      if (hostname === "youtu.be" || hostname === "www.youtu.be") {
+        videoID = parsed.pathname.split("/")[1] || "";
+      } else if (
+        ["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"]
+          .includes(hostname)
+      ) {
+        if (parsed.pathname === "/watch") {
+          videoID = parsed.searchParams.get("v") || "";
+        } else {
+          const match = parsed.pathname.match(/^\/(?:shorts|live|embed)\/([^/]+)/);
+          videoID = match?.[1] || "";
+        }
+      }
+
+      return /^[A-Za-z0-9_-]{11}$/.test(videoID) ? videoID : null;
+    } catch {
+      return null;
+    }
   }
 
 
@@ -1240,302 +1272,47 @@
   // =====================================================
 
   function getDroppedURL(e) {
-
-    let url = "";
-
-
     if (!e.dataTransfer) {
       return "";
     }
 
-
-    // TEXT/URI-LIST
-
+    const candidates = [];
     try {
-
       const uri =
         e.dataTransfer.getData(
           "text/uri-list"
         );
-
-
       if (uri) {
-
-        const firstURL =
-          uri
-            .split(/\r?\n/)
-            .find(
-              line =>
-                line &&
-                !line.startsWith("#")
-            );
-
-
-        if (firstURL) {
-
-          url =
-            firstURL.trim();
-
-        }
-
+        candidates.push(...uri.split(/\r?\n/).filter((line) => line && !line.startsWith("#")));
       }
-
     } catch (error) {
-
-      console.log(
-        "URI read failed:",
-        error
-      );
-
+      console.log("URI read failed:", error);
     }
 
-
-    // TEXT/PLAIN
-
-    if (!url) {
-
-      try {
-
-        const text =
-          e.dataTransfer.getData(
-            "text/plain"
-          );
-
-
-        if (text) {
-
-          const match =
-            text.match(
-              /https?:\/\/[^\s]+/i
-            );
-
-
-          if (match) {
-
-            url =
-              match[0];
-
-          }
-
-        }
-
-      } catch (error) {
-
-        console.log(
-          "Text read failed:",
-          error
-        );
-
+    try {
+      const text = e.dataTransfer.getData("text/plain");
+      const match = text?.match(/https?:\/\/[^\s<>"']+/i);
+      if (match) {
+        candidates.push(match[0].replace(/[),.;!?]+$/, ""));
       }
-
+    } catch (error) {
+      console.log("Text read failed:", error);
     }
 
-
-    // HTML
-
-    if (!url) {
-
-      try {
-
-        const html =
-          e.dataTransfer.getData(
-            "text/html"
-          );
-
-
-        if (html) {
-
-          const temp =
-            document.createElement("div");
-
-          temp.innerHTML = html;
-
-
-          const links =
-            temp.querySelectorAll("a");
-
-
-          for (const link of links) {
-
-            if (
-              link.href &&
-              isYouTubeURL(link.href)
-            ) {
-
-              url =
-                link.href;
-
-              break;
-
-            }
-
-          }
-
-        }
-
-      } catch (error) {
-
-        console.log(
-          "HTML read failed:",
-          error
-        );
-
+    try {
+      const html = e.dataTransfer.getData("text/html");
+      if (html) {
+        const temp = document.createElement("div");
+        temp.innerHTML = html;
+        temp.querySelectorAll("a[href]").forEach((link) => candidates.push(link.href));
       }
-
+    } catch (error) {
+      console.log("HTML read failed:", error);
     }
 
-
-    if (url) {
-
-      url =
-        url
-          .trim()
-          .replace(/^["']|["']$/g, "");
-
-    }
-
-
-    return url;
-
-  }
-
-
-  // =====================================================
-  // ADD YOUTUBE MESSAGE
-  // =====================================================
-
-  function addYouTubeMessage(url) {
-
-    const videoID =
-      getYouTubeID(url);
-
-
-    if (!videoID) {
-
-      console.log(
-        "Invalid YouTube URL:",
-        url
-      );
-
-      return;
-
-    }
-
-
-    const message =
-      document.createElement("div");
-
-    message.className =
-      "fc-message fc-youtube-message";
-
-
-    const card =
-      document.createElement("div");
-
-    card.className =
-      "fc-youtube-card";
-
-
-    // THUMBNAIL
-
-    const thumbnail =
-      document.createElement("img");
-
-    thumbnail.className =
-      "fc-youtube-thumb";
-
-    thumbnail.src =
-      `https://img.youtube.com/vi/${encodeURIComponent(videoID)}/mqdefault.jpg`;
-
-    thumbnail.alt =
-      "YouTube video thumbnail";
-
-
-    thumbnail.onerror =
-      function () {
-
-        this.style.display = "none";
-
-      };
-
-
-    // DETAILS
-
-    const details =
-      document.createElement("div");
-
-    details.className =
-      "fc-youtube-details";
-
-
-    // LABEL
-
-    const label =
-      document.createElement("div");
-
-    label.className =
-      "fc-youtube-label";
-
-    label.textContent =
-      "▶ YouTube Video";
-
-
-    // TITLE
-
-    const title =
-      document.createElement("div");
-
-    title.className =
-      "fc-youtube-title";
-
-    title.textContent =
-      "YouTube Video";
-
-
-    // CLICKABLE URL
-
-    const link =
-      document.createElement("a");
-
-    link.className =
-      "fc-youtube-url";
-
-    link.href =
-      url;
-
-    link.target =
-      "_blank";
-
-    link.rel =
-      "noopener noreferrer";
-
-    link.textContent =
-      url;
-
-    link.title =
-      "Open YouTube video";
-
-
-    details.appendChild(label);
-
-    details.appendChild(title);
-
-    details.appendChild(link);
-
-
-    card.appendChild(thumbnail);
-
-    card.appendChild(details);
-
-
-    message.appendChild(card);
-
-    messages.appendChild(message);
-
-
-    messages.scrollTop =
-      messages.scrollHeight;
-
+    return candidates
+      .map((candidate) => candidate.trim().replace(/^["']|["']$/g, ""))
+      .find((candidate) => isYouTubeURL(candidate)) || "";
   }
 
 
@@ -1602,59 +1379,26 @@
     );
 
 
-    console.log(
-      "🔥 DROP DETECTED"
-    );
-
-
     const droppedURL =
       getDroppedURL(e);
 
-
-    console.log(
-      "Dragged URL:",
-      droppedURL
-    );
-
-
-    // ACTUAL DRAGGED URL
-
-    if (
-      droppedURL &&
-      isYouTubeURL(droppedURL) &&
-      getYouTubeID(droppedURL)
-    ) {
-
-      addYouTubeMessage(
-        droppedURL
-      );
-
+    if (droppedURL) {
       openTab("chats");
-
+      sendChatMessage(droppedURL).catch((error) => {
+        alert(`Video link could not be sent: ${error.message}`);
+      });
       return;
-
     }
-
-
-    // FALLBACK CURRENT PAGE
 
     const currentURL =
       window.location.href;
 
-
-    if (
-      isYouTubeURL(currentURL) &&
-      getYouTubeID(currentURL)
-    ) {
-
-      addYouTubeMessage(
-        currentURL
-      );
-
+    if (isYouTubeURL(currentURL)) {
       openTab("chats");
-
+      sendChatMessage(currentURL).catch((error) => {
+        alert(`Video link could not be sent: ${error.message}`);
+      });
       return;
-
     }
 
 
